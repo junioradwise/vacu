@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { privateDirectory, requestLimit, responseLimit, socketPath } from './socket.mjs';
 
 const usage = `vacu status | tabs | use TAB_ID | release
-vacu open URL                  Open a new background tab
+vacu open URL                  Open a background tab; run use TAB_ID before wait or snapshot
 vacu snapshot                  Page text and control references
 vacu --pretty COMMAND ...      Indent JSON for human readers (default: compact)
 vacu [--session ID] snapshot --brief  Short page preview with clickable refs
