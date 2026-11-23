@@ -212,6 +212,7 @@ async function command(connection, args) {
   if (verb === 'release' && !terms.length) { release(); return { tab: null }; }
 
   const s = selected;
+  const findTicket = verb === 'find' ? crypto.randomUUID() : undefined;
   const ctx = {
     origin: s?.origin,
     assertCurrent: () => current(s),
@@ -219,10 +220,10 @@ async function command(connection, args) {
     waitForCursor: () => page(s, 'waitCursor'),
     getElement: (...params) => page(s, 'getElement', ...params),
     observeWait: (_, text) => page(s, 'waitText', text),
-    findControl: (criteria) => page(s, 'findControl', criteria),
+    findControl: (criteria) => page(s, 'findControl', criteria, findTicket),
     clickRef: (ref) => interaction['mouse-click'](['left', '-', ref], {
       ...ctx,
-      page: (_, ...params) => page(s, 'findInteraction', ...params),
+      page: (_, ...params) => page(s, 'findInteraction', findTicket, ...params),
     }),
     inspectionScope: async () => ({
       assertCurrent: () => current(s),

@@ -18,7 +18,6 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
     closeActive?.();
     active = port;
     let state;
-    let find;
     const disconnect = closeActive = () => { clear(); port.disconnect(); };
     function clear() {
       if (active !== port) return;
@@ -39,18 +38,6 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
     function assertCurrent() {
       if (active !== port || !state?.host.isConnected || location.href !== state.href || globalThis.origin !== state.origin) {
         throw new Error('Firefox document changed; select it again');
-      }
-    }
-    function withUniqueControl(criteria, use) {
-      const hadTargets = Object.hasOwn(state, 'targets');
-      const previous = state.targets;
-      try {
-        const result = scopedSnapshotInPage(state.origin, state.key, 'uniqueControl', criteria);
-        if (!result.ok) return result;
-        return use(result.value, state.targets);
-      } finally {
-        if (hadTargets) state.targets = previous;
-        else delete state.targets;
       }
     }
     async function run(op, args) {
@@ -87,24 +74,24 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
         case 'scopedSnapshot': return scopedSnapshotInPage(state.origin, state.key, ...args);
         case 'getElement': return getElementInPage(state.origin, state.key, ...args);
         case 'waitText': return ok(waitTextInPage(state.origin, ...args));
-        case 'findControl': {
-          find = undefined;
-          return withUniqueControl(args[0], (value, targets) => {
-            find = { criteria: args[0], targets };
-            return ok(value);
-          });
-        }
+        case 'findControl': return scopedSnapshotInPage(state.origin, state.key, 'uniqueControl', args[0], null, args[1]);
         case 'findInteraction': {
-          const [phase, payload] = args;
-          const match = find;
-          if (phase === 'commit') find = undefined;
-          if (!match) throw new Error('Find target expired');
-          return withUniqueControl(match.criteria, (_, targets) => {
-            if (targets[0] !== match.targets[0]) throw new Error('Exact control changed during find');
-            // Only the guarded preview/commit sees this private ref; existing snapshot refs stay intact.
+          const [ticket, phase, payload] = args;
+          const match = state.find;
+          if (!match || match.ticket !== ticket) throw new Error('Find target expired');
+          if (phase === 'commit') delete state.find;
+          const verified = match.verify();
+          if (!verified.ok) return verified;
+          // Only the guarded preview/commit sees this private ref; existing snapshot refs stay intact.
+          const hadTargets = Object.hasOwn(state, 'targets');
+          const previous = state.targets;
+          try {
             state.targets = match.targets;
             return interactionInPage(state.origin, state.key, phase, payload);
-          });
+          } finally {
+            if (hadTargets) state.targets = previous;
+            else delete state.targets;
+          }
         }
         case 'interaction': return interactionInPage(state.origin, state.key, ...args);
         case 'inspect': return inspectionPage(state.origin, state.key, ...args);

@@ -315,7 +315,7 @@ async function page(s, operation, ...args) {
   else if (session !== s) throw new Error('Tab is no longer authorized');
   else {
     if (operation === 'confirmClick') target.documentIds = [args.shift()];
-    if (operation === 'click' && args[3]) target.documentIds = [args.pop()];
+    if (operation === 'findClick') target.documentIds = [args.pop()];
     if (s.userDocument) {
       await checkedTab(s);
       target.documentIds = [s.userDocument.documentId];
@@ -354,10 +354,10 @@ async function waitForCursor(s, wait = () => page(s, 'waitCursor')) {
 }
 
 // Runs in the extension's isolated world in the main document, not in site JS.
-function inPage(origin, key, markTitle, operation, arg, y, animate = true) {
+function inPage(origin, key, markTitle, operation, arg, y, animate = true, findTicket) {
   const fail = (error) => ({ error });
   const ok = (value) => ({ ok: true, value });
-  if (location.origin !== origin) return fail('Page changed origin; authorize it again');
+  if (window !== window.top || location.origin !== origin) return fail('Page changed origin or frame; authorize it again');
   if (operation === 'clear') {
     if (globalThis.piChrome?.key === key) globalThis.piChrome.clear();
     return ok(true);
@@ -442,12 +442,18 @@ function inPage(origin, key, markTitle, operation, arg, y, animate = true) {
   }
   if (operation === 'confirmClick') {
     const preview = state.preview;
+    const find = preview?.find;
+    if (find?.ticket !== (arg ?? undefined) || (find && state.find !== find)) return fail('Find target expired');
     delete state.preview;
+    if (find) delete state.find;
     if (document.hidden || !preview || document.elementFromPoint(preview.x, preview.y) !== preview.hit
-      || preview.hit.closest('a[href]')?.href !== preview.href || preview.hit.closest(':disabled')) {
+      || preview.hit.closest('a[href]')?.href !== preview.href || preview.hit.closest(':disabled')
+      || (preview.binding && ((!find && state.targets !== preview.targets)
+        || !preview.binding.valid(preview.proxy ? preview.hit : undefined)))) {
       return fail('Click target changed during preview; take a new snapshot');
     }
-    return ok(true);
+    const verified = find?.verify();
+    return verified && !verified.ok ? verified : ok(true);
   }
 
   if (operation === 'snapshot') {
@@ -474,12 +480,22 @@ function inPage(origin, key, markTitle, operation, arg, y, animate = true) {
     return fail('Click a text field first; password, file and other non-text fields are not supported');
   }
 
+  const find = operation === 'findClick' ? state.find : null;
+  if (operation === 'findClick') {
+    if (!find || find.ticket !== findTicket) return fail('Find target expired');
+    const verified = find.verify();
+    if (!verified.ok) return verified;
+    operation = 'click';
+  }
+  const targets = find?.targets ?? state.targets;
+  let binding;
+  let proxy;
   let x = arg;
   let target;
   if (arg === null) {
     ({ x, y } = state.point ?? { x: innerWidth / 2, y: innerHeight / 2 });
   } else if (typeof arg === 'string') {
-    target = state.targets?.[Number(arg.slice(2)) - 1];
+    target = targets?.[Number(arg.slice(2)) - 1];
     if (!target?.isConnected || target.matches(':disabled') || !target.checkVisibility()) {
       return fail('Stale or disabled control; take a new snapshot');
     }
@@ -490,7 +506,15 @@ function inPage(origin, key, markTitle, operation, arg, y, animate = true) {
       const bottom = Math.min(innerHeight, rect.bottom);
       return { x: (left + right) / 2, y: (top + bottom) / 2 };
     };
-    const position = visibleCenter(target.getBoundingClientRect());
+    let position = visibleCenter(target.getBoundingClientRect());
+    binding = operation === 'click' && state.radioProxies?.get(targets)?.get(target);
+    if (binding && !binding.valid()) return fail('Radio label changed; take a fresh snapshot');
+    if (binding && (!target.checkVisibility({ visibilityProperty: true, opacityProperty: true })
+      || !target.contains(document.elementFromPoint(position.x, position.y)))) {
+      proxy = binding;
+      target = binding.label;
+      position = visibleCenter(target.getBoundingClientRect());
+    }
     if (!target.contains(document.elementFromPoint(position.x, position.y))) {
       target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
     }
@@ -499,11 +523,13 @@ function inPage(origin, key, markTitle, operation, arg, y, animate = true) {
   }
   if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return fail('Coordinates outside the viewport');
   const hit = document.elementFromPoint(x, y);
-  if (target && (!hit || !target.contains(hit))) return fail('Control is covered; use a fresh snapshot or viewport coordinates');
+  if (target && (!hit || !target.contains(hit) || (proxy && !proxy.valid(hit)))) {
+    return fail('Control is covered or unavailable; use a fresh snapshot or viewport coordinates');
+  }
   if (operation !== 'move' && hit?.matches('iframe, frame, embed, object')) return fail('Frame input is not supported');
   if (operation === 'click') {
     if (!hit || hit.matches('input[type=file]')) return fail('No clickable target, or a file picker');
-    state.preview = { x, y, hit, href: hit.closest('a[href]')?.href };
+    state.preview = { x, y, hit, href: hit.closest('a[href]')?.href, binding, proxy, targets, find };
   }
 
   state.cursor.firstElementChild.setAttribute('opacity', operation === 'click' ? '1' : '0');
@@ -543,13 +569,15 @@ async function checkedTab(s) {
   return info;
 }
 
-async function click(s, target, y, wasActive, expectedDocument) {
+async function click(s, target, y, wasActive, expectedDocument, findTicket) {
   if (!wasActive) {
     await chrome.tabs.update(s.id, { active: true });
     await checkedTab(s);
   }
   if (expectedDocument && s.documentId !== expectedDocument) throw new Error('Click cancelled: selected document changed');
-  const point = await page(s, 'click', target, y, Boolean(wasActive), ...(expectedDocument ? [expectedDocument] : []));
+  const point = findTicket
+    ? await page(s, 'findClick', target, y, Boolean(wasActive), findTicket, expectedDocument)
+    : await page(s, 'click', target, y, Boolean(wasActive));
   const documentId = s.documentId;
   if (expectedDocument && documentId !== expectedDocument) throw new Error('Click cancelled: selected document changed');
   await cdp(s, 'Input.dispatchMouseEvent', { ...point, type: 'mouseMoved' });
@@ -557,7 +585,7 @@ async function click(s, target, y, wasActive, expectedDocument) {
     throw new Error('Click cancelled: selected tab is not visible');
   }
   if (s.documentId !== documentId) throw new Error('Click cancelled: selected document changed');
-  await page(s, 'confirmClick', documentId);
+  await page(s, 'confirmClick', documentId, ...(findTicket ? [findTicket] : []));
   await cdp(s, 'Input.dispatchMouseEvent', { ...point, type: 'mousePressed', button: 'left', buttons: 1, clickCount: 1 });
   await cdp(s, 'Input.dispatchMouseEvent', { ...point, type: 'mouseReleased', button: 'left', clickCount: 1 });
   return { ...point, dispatched: true };
@@ -566,6 +594,7 @@ async function click(s, target, y, wasActive, expectedDocument) {
 async function runAdapter(connection, verb, args) {
   const s = session;
   const documentId = s?.documentId;
+  const findTicket = verb === 'find' ? crypto.randomUUID() : undefined;
   const assertBridge = () => {
     if (bridge !== connection) throw new Error('Bridge stopped');
   };
@@ -616,12 +645,12 @@ async function runAdapter(connection, verb, args) {
     },
     integrationLayoutMetrics: async () => { await assertCurrent(); return cdp(s, 'Page.getLayoutMetrics'); },
     getElement: async (property, ref) => unwrap(await inject(getElementInPage, s.overlayKey, property, ref)),
-    findControl: async (criteria) => unwrap(await inject(scopedSnapshotInPage, s.overlayKey, 'uniqueControl', criteria)),
+    findControl: async (criteria) => unwrap(await inject(scopedSnapshotInPage, s.overlayKey, 'uniqueControl', criteria, null, findTicket)),
     clickRef: async (ref) => {
       await assertCurrent();
       const { active } = await checkedTab(s);
       await assertCurrent();
-      return click(s, ref, null, active, documentId);
+      return click(s, ref, null, active, documentId, findTicket);
     },
     observeWait: async (kind, value) => {
       if (kind === 'text') return inject(waitTextInPage, value);

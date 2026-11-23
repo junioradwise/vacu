@@ -98,20 +98,34 @@ export function interactionInPage(origin, overlayKey, phase, payload) {
     if (!(x >= 0 && y >= 0 && x < innerWidth && y < innerHeight)) throw new Error('Coordinates outside the viewport');
     return safe(document.elementFromPoint(x, y));
   };
-  const resolve = (point) => {
+  const resolve = (point, selection) => {
     if (!point) return state.point ?? { x: innerWidth / 2, y: innerHeight / 2 };
     if (!point.ref) return point;
-    const element = lookup(point.ref);
+    let element = lookup(point.ref);
+    const proxy = selection && state.radioProxies?.get(state.targets)?.get(element);
+    if (proxy) {
+      if (!proxy.valid()) throw new Error('Radio label changed; take a fresh snapshot');
+      selection.binding = proxy;
+    }
     const center = () => {
       const { left, right, top, bottom } = element.getBoundingClientRect();
       return { x: (Math.max(left, 0) + Math.min(right, innerWidth)) / 2, y: (Math.max(top, 0) + Math.min(bottom, innerHeight)) / 2 };
     };
     let { x, y } = center();
+    if (proxy && (!element.checkVisibility({ visibilityProperty: true, opacityProperty: true })
+      || !element.contains(document.elementFromPoint(x, y)))) {
+      element = proxy.label;
+      selection.proxy = proxy;
+      ({ x, y } = center());
+    }
     if (!element.contains(document.elementFromPoint(x, y))) {
       element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
       ({ x, y } = center());
     }
-    if (!element.contains(hit({ x, y }))) throw new Error('Snapshot control is covered');
+    const target = hit({ x, y });
+    if (!element.contains(target) || (selection?.proxy && !selection.proxy.valid(target))) {
+      throw new Error('Snapshot control is covered or unavailable');
+    }
     return { x, y };
   };
   const cursor = (point, ring) => {
@@ -148,7 +162,8 @@ export function interactionInPage(origin, overlayKey, phase, payload) {
   };
   const checkedHit = (saved) => {
     const element = hit(saved.point);
-    if (element !== saved.element || (saved.signature && activation(element).some((value, i) => value !== saved.signature[i]))) {
+    if (element !== saved.element || (saved.binding && !saved.binding.valid(saved.proxy ? element : undefined))
+      || (saved.signature && activation(element).some((value, i) => value !== saved.signature[i]))) {
       throw new Error('Target changed during interaction; take a fresh snapshot');
     }
     return element;
@@ -157,7 +172,8 @@ export function interactionInPage(origin, overlayKey, phase, payload) {
   try {
     if (phase === 'preview') {
       delete state.interactionPreview;
-      const start = resolve(payload.start);
+      const selection = payload.kind === 'click' ? {} : undefined;
+      const start = resolve(payload.start, selection);
       const points = [start];
       if (payload.kind === 'drag') {
         const { x, y } = resolve(payload.end);
@@ -165,7 +181,8 @@ export function interactionInPage(origin, overlayKey, phase, payload) {
       } else if (payload.kind !== 'click') throw new Error('Invalid interaction preview');
       const path = points.map((point) => {
         const element = hit(point);
-        return { point, element, signature: payload.kind === 'click' ? activation(element) : null };
+        return { point, element, binding: selection?.binding, proxy: selection?.proxy,
+          signature: payload.kind === 'click' ? activation(element) : null };
       });
       state.interactionPreview = { action: payload, path, snapshot: payload.start.ref ? state.targets : null };
       cursor(start, true);
@@ -178,7 +195,8 @@ export function interactionInPage(origin, overlayKey, phase, payload) {
       const { action, path } = preview;
       const start = path[0];
       cursor(start.point, false);
-      if (preview.snapshot && (state.targets !== preview.snapshot || !lookup(action.start.ref).contains(start.element))) {
+      if (preview.snapshot && (state.targets !== preview.snapshot
+        || !(start.proxy?.label ?? lookup(action.start.ref)).contains(start.element))) {
         throw new Error('Snapshot changed during interaction');
       }
       for (const step of path) checkedHit(step);

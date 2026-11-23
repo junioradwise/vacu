@@ -116,6 +116,27 @@ test('a replacement snapshot invalidates a pending reference even when it contai
   assert.equal(log.length, 0);
 });
 
+test('radio click uses the pinned label without replacing the snapshot ref', async (t) => {
+  const { ctx, doc, element, state, log } = fixture(t);
+  const radio = element('input', 'radio');
+  const label = element('label');
+  label.control = radio;
+  doc.elementFromPoint = () => label;
+  state.targets = [radio];
+  state.radioProxies = new WeakMap([[state.targets, new Map([[radio, {
+    label, valid: (hit = label) => hit === label && label.control === radio,
+  }]])]]);
+  const click = () => commands['mouse-click'](['left', '-', '@r1'], ctx);
+  await click();
+  assert.equal(state.targets[0], radio);
+  assert.deepEqual(log.map(({ target, event }) => [target, event.type]),
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].map((type) => [label, type]));
+  log.length = 0;
+  ctx.waitForCursor = async () => { label.control = element('input', 'radio'); };
+  await assert.rejects(click(), /Target changed/);
+  assert.equal(log.length, 0);
+});
+
 test('rejecting authorization during preview prevents commit', async (t) => {
   const { ctx, log } = fixture(t);
   ctx.waitForCursor = async () => { ctx.assertCurrent = async () => { throw new Error('revoked'); }; };
