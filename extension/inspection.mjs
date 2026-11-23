@@ -7,17 +7,29 @@ function selector(input) {
   if (typeof input !== 'string' || input.length > 4096) throw new Error('Expected a bounded JSON locator');
   let spec;
   try { spec = JSON.parse(input); } catch { throw new Error('Invalid JSON locator'); }
+  if (only(spec, ['css', 'selector']) && Object.keys(spec).length === 1) {
+    spec = { all: [{ by: 'css', value: spec.css ?? spec.selector }] };
+  }
   const locator = (item) => {
     if (!only(item, ['by', 'value']) || !locatorKinds.includes(item.by)
       || typeof item.value !== 'string' || !item.value.trim() || item.value.length > 256
       || (item.by === 'ref' && !refPattern.test(item.value))) throw new Error('Invalid typed locator');
-    // Attribute selectors and pseudo-classes can reveal values not exposed by metadata.
     let value = item.value.trim();
     if (item.by === 'css') {
       const compound = /^(?:[a-zA-Z][\w-]*|\*)?(?:[.#][a-zA-Z_][\w-]*)*$/;
+      // Allow structural attributes only; never compare arbitrary DOM attribute values.
+      const dataPresence = /\[data-[a-z][a-z0-9_-]*\]/gi;
+      const inputAttribute = /\[(?:type=(?:[a-z][\w-]*|"[a-z][\w-]*"|'[a-z][\w-]*')|name\^=(?:[a-z_][\w-]*|"[a-z_][\w-]*"|'[a-z_][\w-]*'))\]/gi;
       value = value.replace(/\s*>\s*/g, '>').replace(/\s+/g, ' ');
-      if (value.split(/[> ]/).some((part) => !part || !compound.test(part))) {
-        throw new Error('CSS locator supports only tags, IDs, classes and descendant/child combinators');
+      const valid = (part) => {
+        if (!part) return false;
+        const withoutData = part.replace(dataPresence, '.vacu-attribute');
+        const structural = /^input(?=[.#\[])/i.test(part)
+          ? withoutData.replace(inputAttribute, '.vacu-attribute') : withoutData;
+        return compound.test(structural);
+      };
+      if (!value.split(/[> ]/).every(valid)) {
+        throw new Error('CSS locator supports only tags, IDs, classes, [data-*] presence, input[type=…], input[name^=…], and descendant/child combinators');
       }
     }
     if (['name', 'label', 'text'].includes(item.by)) value = value.replace(/\s+/g, ' ');

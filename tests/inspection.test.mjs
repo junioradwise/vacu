@@ -81,6 +81,29 @@ test('06–07: typed locators, intersection, scoping, filters, and metadata with
   await assert.rejects(call('query', [locator('xpath', '//button')], ctx), /typed locator/);
 });
 
+test('CSS shorthand and structural attributes share the same restricted grammar', async () => {
+  const selectors = [
+    'input[type=radio][name^=bundle_option]',
+    '[data-ctp-configurator] label',
+    '[data-ctp-configurator]>input[type="radio"]',
+  ];
+  for (const value of selectors) {
+    const ctx = context({ async run(operation, spec) {
+      assert.equal(operation, 'query');
+      assert.deepEqual(spec, { all: [{ by: 'css', value }] });
+      return { count: 0, items: [], truncated: false };
+    } });
+    for (const arg of [JSON.stringify({ css: value }), JSON.stringify({ selector: value }), locator('css', value)]) {
+      assert.equal((await call('query', [arg], ctx)).count, 0);
+    }
+  }
+  const ctx = context({ run: assert.fail });
+  for (const css of ['input[value^=secret]', '[data-token^=secret]', 'input[autocomplete]',
+    '[name^=bundle_option]', 'form:has(input[type=radio])', '[data-marker],input', 'input[name^="bad value"]']) {
+    await assert.rejects(call('query', [JSON.stringify({ css })], ctx), /supports only/);
+  }
+});
+
 test('06–07: refs belong to a live document, selected session and latest query', async (t) => {
   const { ctx, makeContext, save } = fixture(t);
   const getRef = async () => locator('ref', (await call('query', [locator('name', 'Save')], ctx)).items[0].ref);
