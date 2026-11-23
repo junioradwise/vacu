@@ -446,14 +446,39 @@ function inPage(origin, key, markTitle, operation, arg, y, animate = true, findT
     if (find?.ticket !== (arg ?? undefined) || (find && state.find !== find)) return fail('Find target expired');
     delete state.preview;
     if (find) delete state.find;
-    if (document.hidden || !preview || document.elementFromPoint(preview.x, preview.y) !== preview.hit
+    if ((!y && document.hidden) || !preview || document.elementFromPoint(preview.x, preview.y) !== preview.hit
       || preview.hit.closest('a[href]')?.href !== preview.href || preview.hit.closest(':disabled')
       || (preview.binding && ((!find && state.targets !== preview.targets)
         || !preview.binding.valid(preview.proxy ? preview.hit : undefined)))) {
       return fail('Click target changed during preview; take a new snapshot');
     }
     const verified = find?.verify();
-    return verified && !verified.ok ? verified : ok(true);
+    if (verified && !verified.ok) return verified;
+    if (y) {
+      const { hit, x, y: clientY } = preview;
+      const control = hit.closest('label')?.control ?? hit.closest('input,button');
+      if (hit.closest('iframe,frame,embed,object,fencedframe,portal,[inert],input[type=file],input[type=password]')
+        || control?.matches(':disabled,input[type=file],input[type=password]')) {
+        return fail('This control cannot be clicked in the background');
+      }
+      const anchor = hit.closest('a,area');
+      if (anchor && anchor.namespaceURI !== 'http://www.w3.org/1999/xhtml') {
+        return fail('SVG links require a foreground click; select the tab manually');
+      }
+      const link = anchor?.hasAttribute('href') ? anchor : null;
+      const form = ['submit', 'image'].includes(control?.type) ? control.form : null;
+      const baseTarget = document.querySelector('base[target]')?.getAttribute('target');
+      const sameTab = (target) => ['', '_self'].includes((target || baseTarget || '').toLowerCase());
+      const destination = link?.href ?? (form && (control.getAttribute('formaction') === null ? form.action : control.formAction));
+      if ((link && (link.hasAttribute('download') || !sameTab(link.getAttribute('target'))))
+        || (form && !sameTab(control.getAttribute('formtarget') ?? form.getAttribute('target')))
+        || ((link || form) && !/^https?:/i.test(destination))) {
+        return fail('This link or form requires a foreground click; select the tab manually');
+      }
+      hit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY, view: window, detail: 1 }));
+    }
+    return ok(true);
   }
 
   if (operation === 'snapshot') {
@@ -570,16 +595,20 @@ async function checkedTab(s) {
 }
 
 async function click(s, target, y, wasActive, expectedDocument, findTicket) {
-  if (!wasActive) {
-    await chrome.tabs.update(s.id, { active: true });
-    await checkedTab(s);
-  }
+  if (!wasActive) expectedDocument ??= s.documentId;
+  if (!wasActive && !expectedDocument) throw new Error('Selected document is not ready');
   if (expectedDocument && s.documentId !== expectedDocument) throw new Error('Click cancelled: selected document changed');
   const point = findTicket
     ? await page(s, 'findClick', target, y, Boolean(wasActive), findTicket, expectedDocument)
-    : await page(s, 'click', target, y, Boolean(wasActive));
+    : await page(s, 'click', target, y, Boolean(wasActive), ...(expectedDocument ? [expectedDocument] : []));
   const documentId = s.documentId;
   if (expectedDocument && documentId !== expectedDocument) throw new Error('Click cancelled: selected document changed');
+  if (!wasActive) {
+    await checkedTab(s);
+    if (s.documentId !== documentId) throw new Error('Click cancelled: selected document changed');
+    await page(s, 'confirmClick', documentId, findTicket ?? null, true);
+    return { ...point, dispatched: true, trusted: false };
+  }
   await cdp(s, 'Input.dispatchMouseEvent', { ...point, type: 'mouseMoved' });
   if (!documentId || !await waitForCursor(s) || !(await checkedTab(s)).active) {
     throw new Error('Click cancelled: selected tab is not visible');

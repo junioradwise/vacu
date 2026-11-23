@@ -76,13 +76,16 @@ test('named sessions group their own tabs and reject commands targeting another 
     assert.deepEqual(await run('session-list'), [b]);
     assert.equal(tabs.size, 3);
     assert.equal(tabs.get(second.tab).active, undefined);
+    assert.deepEqual(await run('--session', b.sessionId, 'click', '@r1'), { x: 10, y: 10, dispatched: true, trusted: false });
+    assert.equal(tabs.get(second.tab).active, undefined);
+    assert.deepEqual(mouseEvents, []);
+    tabs.get(second.tab).active = true;
     assert.deepEqual(await run('--session', b.sessionId, 'click', '@r1'), { x: 10, y: 10, dispatched: true });
-    assert.equal(tabs.get(second.tab).active, true);
     assert.deepEqual(mouseEvents, ['mouseMoved', 'mousePressed', 'mouseReleased']);
     visible = false;
     assert.match(await run('--session', b.sessionId, 'click', '@r1'), /not visible/);
     assert.deepEqual(mouseEvents, ['mouseMoved', 'mousePressed', 'mouseReleased', 'mouseMoved']);
-    assert.deepEqual(clickMotion, [false, true]);
+    assert.deepEqual(clickMotion, [false, true, true]);
   } finally {
     delete globalThis.chrome;
   }
