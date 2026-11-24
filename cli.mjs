@@ -51,12 +51,12 @@ vacu session-start | session-status | session-handoff | session-restore | sessio
 vacu session-result ok|failed|cancelled | session-end
 TARGET is @rN or X Y; use - for no mouse modifiers. New interactions use synthetic events; inspection is main-document only.`;
 
-async function request(args) {
+async function request(args, timeout = 19_000) {
   const line = JSON.stringify(args) + '\n';
   if (Buffer.byteLength(line) > requestLimit) throw new Error('Command too large');
   privateDirectory();
   const client = createConnection(socketPath);
-  client.setTimeout(19_000, () => client.destroy(new Error('Command timed out')));
+  client.setTimeout(timeout, () => client.destroy(new Error('Command timed out')));
   client.on('connect', () => client.write(line));
   const chunks = [];
   let size = 0;
@@ -112,7 +112,7 @@ try {
   } else if (args[args[0] === '--session' ? 2 : 0] === 'screenshot') {
     const index = args[0] === '--session' ? 2 : 0;
     const { path, dir, options } = parseScreenshotArgs(args.slice(index + 1), process.env);
-    const { data, ...value } = await request([...args.slice(0, index + 1), JSON.stringify(options)]);
+    const { data, ...value } = await request([...args.slice(0, index + 1), JSON.stringify(options)], 65_000);
     if (value.unchanged) {
       console.log(JSON.stringify(value, null, pretty ? 2 : 0));
     } else {

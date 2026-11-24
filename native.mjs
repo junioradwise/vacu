@@ -35,6 +35,8 @@ const server = createServer((client) => {
       const index = args[0] === '--session' ? 2 : 0;
       const framedWait = args[index] === 'inspect-wait' && args[index + 1] === '--frame';
       if (args.length <= index || args.length > index + (framedWait ? 7 : 6)) throw new Error('Invalid command');
+      // Background tabs can take a while to render beyond the viewport.
+      if (args[index] === 'screenshot') client.setTimeout(64_000);
       id = randomUUID();
       pending.set(id, client);
       send({ id, args });

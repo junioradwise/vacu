@@ -639,7 +639,7 @@ async function captureOnce(s, params) {
   let timer;
   const { data } = await Promise.race([
     cdp(s, 'Page.captureScreenshot', params),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Chrome did not return a screenshot; try again')), 12_000); }),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Chrome did not return a screenshot; try again')), 45_000); }),
   ]).finally(() => clearTimeout(timer));
   return data;
 }
