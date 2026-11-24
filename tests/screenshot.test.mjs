@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { changedRatio, clampClip, frameFingerprint, screenshotInPage, screenshotRequest } from '../extension/screenshot.mjs';
+import { changedRatio, clampClip, clipChunks, frameFingerprint, screenshotInPage, screenshotRequest } from '../extension/screenshot.mjs';
 import { parseScreenshotArgs, screenshotFileName } from '../screenshot-options.mjs';
 
 test('CLI parses agent-browser screenshot arguments', () => {
@@ -68,6 +68,10 @@ test('pixel comparison and clip bounds', () => {
   assert.deepEqual(clampClip({ x: -2, y: 5, width: 100, height: 40000 }),
     { clip: { x: 0, y: 5, width: 100, height: 16384 }, clipped: true });
   assert.throws(() => clampClip({ x: 0, y: 0, width: 0, height: 10 }), /no visible area/);
+  assert.deepEqual(clipChunks({ x: 3, y: 10, width: 50, height: 4500 }), [
+    { x: 3, y: 10, width: 50, height: 2000 }, { x: 3, y: 2010, width: 50, height: 2000 }, { x: 3, y: 4010, width: 50, height: 500 },
+  ]);
+  assert.equal(clipChunks({ x: 0, y: 0, width: 10, height: 2000 }).length, 1);
 });
 
 test('in-page preparation resolves targets, labels controls, hides and restores the cursor', (t) => {

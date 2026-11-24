@@ -72,6 +72,15 @@ export function clampClip({ x, y, width, height }) {
   return { clip, clipped: clip.width < width || clip.height < height };
 }
 
+// Splits a clip into horizontal bands of at most `size` CSS pixels, top to bottom.
+export function clipChunks(clip, size = 2000) {
+  const chunks = [];
+  for (let offset = 0; offset < clip.height; offset += size) {
+    chunks.push({ x: clip.x, y: clip.y + offset, width: clip.width, height: Math.min(size, clip.height - offset) });
+  }
+  return chunks;
+}
+
 // Self-contained function for chrome.scripting.executeScript in the ISOLATED world of the selected main document.
 export function screenshotInPage(origin, key, operation, payload) {
   const fail = (error) => ({ error });

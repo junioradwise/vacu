@@ -8,7 +8,7 @@ import { commands as elementCommands, getElementInPage } from './get-element.mjs
 import { commands as waitCommands, waitTextInPage } from './wait.mjs';
 import { commands as scopedCommands, scopedSnapshotInPage } from './scoped-snapshot.mjs';
 import { commands as findCommands } from './find-click.mjs';
-import { changedRatio, clampClip, frameFingerprint, maxImageBase64, screenshotInPage, screenshotRequest } from './screenshot.mjs';
+import { changedRatio, clampClip, clipChunks, frameFingerprint, maxImageBase64, screenshotInPage, screenshotRequest } from './screenshot.mjs';
 
 const adapterCommands = { __proto__: null, ...interaction, ...inspection, ...integrations, ...elementCommands, ...waitCommands, ...scopedCommands, ...findCommands };
 for (const verb of ['url', 'tab-info', 'session-start', 'session-handoff', 'session-restore', ...browserWideCommands]) {
@@ -626,13 +626,57 @@ const lastCaptures = new Map();
 chrome.tabs.onRemoved.addListener((tabId) => lastCaptures.delete(tabId));
 
 async function decodeImage(data) {
-  const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
-  const bitmap = await createImageBitmap(new Blob([bytes]));
+  const bitmap = await createImageBitmap(new Blob([base64Bytes(data)]));
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
   return context.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+async function captureOnce(s, params) {
+  // Chrome can occasionally never answer; don't keep the bridge busy forever.
+  let timer;
+  const { data } = await Promise.race([
+    cdp(s, 'Page.captureScreenshot', params),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Chrome did not return a screenshot; try again')), 12_000); }),
+  ]).finally(() => clearTimeout(timer));
+  return data;
+}
+
+function base64Bytes(data) {
+  return Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
+}
+
+async function bytesBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+// A single very tall beyond-viewport capture can come back as the viewport repeated down the image
+// (seen in a long-running desktop Chrome). Capture tall clips in segments and stitch them instead.
+async function captureImage(s, params) {
+  const chunks = params.clip ? clipChunks(params.clip) : [null];
+  if (chunks.length === 1) return captureOnce(s, params);
+  let canvas;
+  let context;
+  let scale;
+  for (const chunk of chunks) {
+    const piece = await captureOnce(s, { ...params, format: 'png', quality: undefined, clip: { ...chunk, scale: 1 } });
+    const bitmap = await createImageBitmap(new Blob([base64Bytes(piece)]));
+    if (!canvas) {
+      scale = bitmap.width / chunk.width;
+      canvas = new OffscreenCanvas(bitmap.width, Math.min(32767, Math.round(params.clip.height * scale)));
+      context = canvas.getContext('2d');
+    }
+    context.drawImage(bitmap, 0, Math.round((chunk.y - params.clip.y) * scale));
+    bitmap.close();
+  }
+  const blob = await canvas.convertToBlob(params.format === 'jpeg'
+    ? { type: 'image/jpeg', quality: (params.quality ?? 80) / 100 } : { type: 'image/png' });
+  return bytesBase64(blob);
 }
 
 async function guardedFrames(s) {
@@ -681,12 +725,7 @@ async function screenshot(s, args) {
       ({ clip, clipped } = clampClip(clip));
       Object.assign(params, { clip: { ...clip, scale: 1 }, captureBeyondViewport: true });
     }
-    // Chrome can occasionally never answer; don't keep the bridge busy forever.
-    let timer;
-    ({ data } = await Promise.race([
-      cdp(s, 'Page.captureScreenshot', params),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Chrome did not return a screenshot; try again')), 12_000); }),
-    ]).finally(() => clearTimeout(timer)));
+    data = await captureImage(s, params);
     // Discard the image if any frame document appeared, navigated or lost access while capturing.
     if (await guardedFrames(s) !== before) throw new Error('Frames changed during capture; screenshot discarded, try again');
     await checkedTab(s);
