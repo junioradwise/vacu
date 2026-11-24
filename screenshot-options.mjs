@@ -3,7 +3,7 @@ const imageExtension = /\.(png|jpe?g)$/i;
 // Parses agent-browser compatible screenshot flags: [SELECTOR] [PATH] plus options, in any order.
 export function parseScreenshotArgs(argv, env = {}) {
   const positional = [];
-  const options = { full: false, annotate: false, ifChanged: false, threshold: 0 };
+  const options = { full: false, annotate: false, ifChanged: false, threshold: 0, scroll: false };
   let dir = env.VACU_SCREENSHOT_DIR || null;
   let format = null;
   let quality = env.VACU_SCREENSHOT_QUALITY ?? null;
@@ -16,6 +16,7 @@ export function parseScreenshotArgs(argv, env = {}) {
     if (arg === '--full' || arg === '-f') options.full = true;
     else if (arg === '--annotate') options.annotate = true;
     else if (arg === '--if-changed') options.ifChanged = true;
+    else if (arg === '--scroll') options.scroll = true;
     else if (arg === '--json') {} // VACU always prints JSON; accepted for agent-browser compatibility.
     else if (arg === '--threshold') {
       const raw = value(i++, arg);

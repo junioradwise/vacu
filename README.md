@@ -59,12 +59,13 @@ vacu screenshot --full ./full-page.jpg   # full page; format follows the extensi
 vacu screenshot @r3 ./button.png         # one control from the latest snapshot
 vacu screenshot '.hero' ./hero.png       # one element (restricted CSS, must match exactly one visible element)
 vacu screenshot --annotate ./page.png    # takes a new snapshot and labels each control [N] = @rN
+vacu screenshot --full --scroll          # VACU extra: scroll through the page first so scroll-triggered content renders
 vacu screenshot --if-changed             # don't write a file if nothing changed since the last capture
 vacu screenshot --threshold 0.01         # treat up to 1% changed pixels as unchanged (implies --if-changed)
 vacu screenshot --screenshot-dir ./shots --screenshot-format jpeg --screenshot-quality 70
 ```
 
-Without `PATH`, files go to `--screenshot-dir`, `VACU_SCREENSHOT_DIR`, or `vacu-screenshots` in the system temp directory. `VACU_SCREENSHOT_FORMAT` and `VACU_SCREENSHOT_QUALITY` set defaults. Output is JSON: `path`, `format`, `annotations` (with `--annotate`), `clipped` (full pages are capped at 16384 CSS pixels per side) and `changedRatio`/`unchanged` (with `--if-changed`). `--json` is accepted for compatibility. Files are written with mode 0600, and an existing `PATH` is overwritten.
+Without `PATH`, files go to `--screenshot-dir`, `VACU_SCREENSHOT_DIR`, or `vacu-screenshots` in the system temp directory. `VACU_SCREENSHOT_FORMAT` and `VACU_SCREENSHOT_QUALITY` set defaults. Output is JSON: `path`, `format`, `annotations` (with `--annotate`), `clipped` (full pages are capped at 16384 CSS pixels per side) and `changedRatio`/`unchanged` (with `--if-changed`). `--json` is accepted for compatibility. `--scroll` is not in agent-browser. It scrolls the page from inside the document in steps (250 ms each, 8 s at most), returns to the original position and reports `scrolled: {steps, complete}`. Sites may still skip animations in background tabs. Files are written with mode 0600, and an existing `PATH` is overwritten.
 
 Capture uses `Page.captureScreenshot` through the already-attached debugger, so background tabs are captured without being activated. The virtual cursor is hidden while capturing. Because a raster image includes every frame on the page, VACU lists all frames before and after the capture. It refuses if any frame is not an HTTP(S) document Chrome grants VACU access to (or an inherited `about:blank`/`about:srcdoc` frame). It discards the image if any frame document changed during capture. `data:`, extension (such as the PDF viewer) and other non-web frames therefore block screenshots of that page. `--if-changed` keeps the last image per tab in extension memory only. Firefox does not support `screenshot` yet.
 

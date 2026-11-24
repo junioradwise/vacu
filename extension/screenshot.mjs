@@ -3,7 +3,7 @@ import { selector as typedSelector } from './inspection.mjs';
 export const maxCaptureSize = 16384;
 export const maxImageBase64 = 30 * 1024 * 1024;
 const refPattern = /^@r[1-9]\d{0,2}$/;
-const keys = ['selector', 'full', 'annotate', 'format', 'quality', 'ifChanged', 'threshold'];
+const keys = ['selector', 'full', 'annotate', 'format', 'quality', 'ifChanged', 'threshold', 'scroll'];
 
 // Validates the CLI's normalized option object; the worker never sees raw CLI flags.
 export function screenshotRequest(input) {
@@ -13,8 +13,8 @@ export function screenshotRequest(input) {
   if (!options || typeof options !== 'object' || Array.isArray(options) || !Object.keys(options).every((key) => keys.includes(key))) {
     throw new Error('Invalid screenshot options');
   }
-  const { selector = null, full = false, annotate = false, format = 'png', quality = null, ifChanged = false, threshold = 0 } = options;
-  if (![full, annotate, ifChanged].every((flag) => typeof flag === 'boolean')) throw new Error('Invalid screenshot options');
+  const { selector = null, full = false, annotate = false, format = 'png', quality = null, ifChanged = false, threshold = 0, scroll = false } = options;
+  if (![full, annotate, ifChanged, scroll].every((flag) => typeof flag === 'boolean')) throw new Error('Invalid screenshot options');
   if (!['png', 'jpeg'].includes(format)) throw new Error('Screenshot format must be png or jpeg');
   if (quality !== null && (!Number.isInteger(quality) || quality < 0 || quality > 100)) {
     throw new Error('Screenshot quality must be an integer from 0 to 100');
@@ -28,7 +28,7 @@ export function screenshotRequest(input) {
       ? { ref: selector }
       : { css: typedSelector(JSON.stringify({ css: selector })).all[0].value };
   }
-  return { target, full, annotate, format, quality: format === 'jpeg' ? quality : null, ifChanged, threshold };
+  return { target, full, annotate, format, quality: format === 'jpeg' ? quality : null, ifChanged, threshold, scroll };
 }
 
 // Every frame that can contribute pixels must be a document Chrome lets VACU access.
@@ -102,6 +102,26 @@ export function screenshotInPage(origin, key, operation, payload) {
   if (operation === 'restore') {
     restore();
     return ok(true);
+  }
+  if (operation === 'scroll') {
+    // Scroll through the page so scroll-triggered animations and lazy content render, then go back.
+    const { stepDelay = 250, settle = 600, budget = 8000 } = payload ?? {};
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const root = document.scrollingElement ?? document.documentElement;
+    const start = { x: scrollX, y: scrollY };
+    const deadline = Date.now() + budget;
+    let steps = 0;
+    return (async () => {
+      for (let y = 0; y < root.scrollHeight - innerHeight && Date.now() < deadline; steps++) {
+        y = Math.min(y + Math.max(200, Math.floor(innerHeight * 0.8)), root.scrollHeight);
+        scrollTo({ left: start.x, top: y, behavior: 'instant' });
+        await sleep(stepDelay);
+      }
+      await sleep(settle);
+      scrollTo({ left: start.x, top: start.y, behavior: 'instant' });
+      await sleep(stepDelay);
+      return ok({ steps, complete: Date.now() < deadline });
+    })();
   }
   if (operation !== 'prepare') return fail('Unsupported screenshot operation');
   restore();

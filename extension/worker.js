@@ -708,6 +708,7 @@ async function screenshot(s, args) {
   }
   const documentId = s.documentId;
   if (!documentId) throw new Error('Selected document is not ready');
+  const scrolled = request.scroll ? await screenshotPage(s, documentId, 'scroll') : undefined;
   const prepared = await screenshotPage(s, documentId, 'prepare', { target: request.target, annotate: request.annotate });
   let data;
   let clipped = false;
@@ -736,7 +737,8 @@ async function screenshot(s, args) {
   if (typeof data !== 'string' || !data || data.length > maxImageBase64) {
     throw new Error('Screenshot is too large; capture a selector or use --screenshot-format jpeg');
   }
-  const result = { format: request.format, ...(clipped ? { clipped } : {}), ...(annotations ? { annotations } : {}) };
+  const result = { format: request.format, ...(clipped ? { clipped } : {}), ...(scrolled ? { scrolled } : {}),
+    ...(annotations ? { annotations } : {}) };
   if (request.ifChanged) {
     const key = JSON.stringify([s.origin, request.target, request.full, request.annotate, request.format, request.quality]);
     const previous = lastCaptures.get(s.id);

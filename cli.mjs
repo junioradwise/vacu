@@ -27,6 +27,7 @@ vacu type TEXT                 Insert text into the focused text field
 vacu scroll DY [@rN]           Wheel-scroll over the cursor or a control
 vacu screenshot [SELECTOR] [PATH]  Save a PNG/JPEG of the viewport, @rN or a CSS-selected element (Chrome)
     --full, -f                 Capture the full page, not just the viewport
+    --scroll                   VACU extra: scroll through the page first so scroll-triggered content renders
     --annotate                 Take a snapshot and label each control [N] = @rN; prints the legend
     --if-changed               Skip writing if the image matches the previous capture of this tab
     --threshold 0-1            Changed-pixel ratio still treated as unchanged (implies --if-changed)

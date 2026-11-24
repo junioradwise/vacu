@@ -6,17 +6,18 @@ import { parseScreenshotArgs, screenshotFileName } from '../screenshot-options.m
 test('CLI parses agent-browser screenshot arguments', () => {
   assert.deepEqual(parseScreenshotArgs([]), {
     path: null, dir: null,
-    options: { full: false, annotate: false, ifChanged: false, threshold: 0, selector: null, format: 'png' },
+    options: { full: false, annotate: false, ifChanged: false, threshold: 0, scroll: false, selector: null, format: 'png' },
   });
   assert.equal(parseScreenshotArgs(['./page.png']).path, './page.png');
+  assert.equal(parseScreenshotArgs(['--full', '--scroll']).options.scroll, true);
   assert.equal(parseScreenshotArgs(['@r3']).options.selector, '@r3');
   const both = parseScreenshotArgs(['#main', 'out/shot.jpg', '--full', '--annotate', '--json']);
   assert.equal(both.path, 'out/shot.jpg');
-  assert.deepEqual(both.options, { full: true, annotate: true, ifChanged: false, threshold: 0, selector: '#main', format: 'jpeg' });
+  assert.deepEqual(both.options, { full: true, annotate: true, ifChanged: false, threshold: 0, scroll: false, selector: '#main', format: 'jpeg' });
   assert.deepEqual(parseScreenshotArgs(['-f', '--threshold', '0.01']).options,
-    { full: true, annotate: false, ifChanged: true, threshold: 0.01, selector: null, format: 'png' });
+    { full: true, annotate: false, ifChanged: true, threshold: 0.01, scroll: false, selector: null, format: 'png' });
   assert.deepEqual(parseScreenshotArgs(['--screenshot-format', 'jpeg', '--screenshot-quality', '70', '--screenshot-dir', 'shots']),
-    { path: null, dir: 'shots', options: { full: false, annotate: false, ifChanged: false, threshold: 0, selector: null, format: 'jpeg', quality: 70 } });
+    { path: null, dir: 'shots', options: { full: false, annotate: false, ifChanged: false, threshold: 0, scroll: false, selector: null, format: 'jpeg', quality: 70 } });
   const env = parseScreenshotArgs([], { VACU_SCREENSHOT_DIR: '/tmp/s', VACU_SCREENSHOT_FORMAT: 'jpeg', VACU_SCREENSHOT_QUALITY: '40' });
   assert.deepEqual([env.dir, env.options.format, env.options.quality], ['/tmp/s', 'jpeg', 40]);
   assert.equal(parseScreenshotArgs(['--screenshot-quality', '50']).options.quality, undefined, 'quality only applies to jpeg');
@@ -32,7 +33,9 @@ test('CLI parses agent-browser screenshot arguments', () => {
 
 test('worker validates normalized screenshot requests', () => {
   assert.deepEqual(screenshotRequest('{}'),
-    { target: null, full: false, annotate: false, format: 'png', quality: null, ifChanged: false, threshold: 0 });
+    { target: null, full: false, annotate: false, format: 'png', quality: null, ifChanged: false, threshold: 0, scroll: false });
+  assert.equal(screenshotRequest('{"scroll":true}').scroll, true);
+  assert.throws(() => screenshotRequest('{"scroll":"yes"}'), /Invalid screenshot options/);
   assert.deepEqual(screenshotRequest('{"selector":"@r12","format":"jpeg","quality":80}').target, { ref: '@r12' });
   assert.equal(screenshotRequest('{"format":"jpeg","quality":80}').quality, 80);
   assert.deepEqual(screenshotRequest('{"selector":"main  >  .hero"}').target, { css: 'main>.hero' });
