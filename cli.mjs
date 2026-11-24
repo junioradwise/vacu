@@ -26,6 +26,9 @@ vacu cursor-move TARGET | mouse-click BUTTON MODIFIERS TARGET | double-click TAR
 vacu drag X1 Y1 X2 Y2 | wheel DX DY [TARGET] | keypress CHORD
 vacu insert-text TEXT | fill @rN TEXT | select-option @rN VALUE | set-checked @rN true|false
 vacu inspect-query LOCATOR_JSON | inspect-element LOCATOR_JSON
+vacu frames                    List same-origin iframe IDs and document IDs (Chrome)
+vacu inspect-query [--brief] --frame ID DOCUMENT_ID LOCATOR_JSON
+vacu inspect-click --frame ID DOCUMENT_ID @iREF
 vacu inspect-wait visible|hidden TIMEOUT_MS LOCATOR_JSON
 vacu inspect-wait domcontentloaded|load TIMEOUT_MS
 vacu title | url | tab-info | assets | inspect-page | layout-metrics

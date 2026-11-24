@@ -7,6 +7,7 @@ import { scopedSnapshotInPage } from '../scoped-snapshot.mjs';
 import { waitTextInPage } from '../wait.mjs';
 import { getElementInPage } from '../get-element.mjs';
 import { install } from './content.mjs';
+import { frameInspection } from './frames.mjs';
 
 export async function stageFirefox(directory) {
   const output = resolve(directory);
@@ -29,7 +30,12 @@ export async function stageFirefox(directory) {
         const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
         return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
       } };
-      (${install})(${interactionInPage}, ${inspectionPage}, ${scopedSnapshotInPage}, ${waitTextInPage}, ${getElementInPage});
+      // Bind the shared read-only inspector to a pinned DOM document and private per-document ref state.
+      const inspectFrame = ({ doc: document, win: window, realm: globalThis }, ...args) => {
+        const { location, performance, innerWidth, innerHeight, scrollX, scrollY, MouseEvent } = window;
+        return (${inspectionPage})(...args);
+      };
+      (${install})(${interactionInPage}, ${inspectionPage}, ${scopedSnapshotInPage}, ${waitTextInPage}, ${getElementInPage}, ${frameInspection}, inspectFrame);
     })();\n`),
   ]);
 }

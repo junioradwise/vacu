@@ -225,10 +225,11 @@ async function command(connection, args) {
       ...ctx,
       page: (_, ...params) => page(s, 'findInteraction', findTicket, ...params),
     }),
-    inspectionScope: async () => ({
-      assertCurrent: () => current(s),
-      run: (...params) => page(s, 'inspect', ...params),
-    }),
+    inspectionScope: async (frameId, documentId) => {
+      if (!frameId) return { assertCurrent: () => current(s), run: (...params) => page(s, 'inspect', ...params) };
+      const run = (...params) => page(s, 'inspectFrame', frameId, documentId, ...params);
+      return { documentId, assertCurrent: () => run('assert'), run };
+    },
   };
   if (['snapshot', 'title'].includes(verb) && !terms.length) return page(s, verb);
   if (verb === 'scoped-snapshot' || verb === 'snapshot') return scoped['scoped-snapshot'](terms, ctx);
@@ -240,8 +241,9 @@ async function command(connection, args) {
   if (verb === 'scroll') return interaction.wheel(['0', ...terms], ctx);
   if (verb === 'type') return interaction['insert-text'](terms, ctx);
   if (Object.hasOwn(interaction, verb)) return interaction[verb](terms, ctx);
-  if (['inspect-query', 'inspect-element', 'inspect-wait'].includes(verb)) {
-    if (terms[0] !== '--frame' && !(verb === 'inspect-wait' && terms[0] === 'dialog')) return inspection[verb](terms, ctx);
+  if (verb === 'frames' && !terms.length) return page(s, 'frames');
+  if (['inspect-query', 'inspect-element', 'inspect-wait', 'inspect-click'].includes(verb)) {
+    if (!(verb === 'inspect-wait' && terms[0] === 'dialog')) return inspection[verb](terms, ctx);
   }
   throw new Error('Not supported by the Firefox baseline (or invalid arguments)');
 }

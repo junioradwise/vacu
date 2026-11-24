@@ -633,7 +633,8 @@ async function runAdapter(connection, verb, args) {
     await checkedTab(s);
     if (s.userDocument) return assertBridge();
     const [probe] = await chrome.scripting.executeScript({
-      target: { tabId: s.id, frameIds: [0] }, func: (origin) => location.origin === origin, args: [s.origin],
+      target: { tabId: s.id, documentIds: [documentId] }, world: 'ISOLATED',
+      func: (origin) => window === window.top && globalThis.origin === origin && location.origin === origin, args: [s.origin],
     });
     await checkedTab(s);
     assertBridge();
@@ -654,6 +655,57 @@ async function runAdapter(connection, verb, args) {
     if (result?.ok !== true) throw new Error(result?.error || 'Page operation failed');
     return result.value;
   };
+  const frameIndex = async () => {
+    await assertCurrent();
+    if (!navigation?.getAllFrames) throw new Error('Frame inspection requires Chrome webNavigation');
+    const entries = await navigation.getAllFrames({ tabId: s.id });
+    await assertCurrent();
+    return new Map((entries ?? []).map(frame => [frame.frameId, frame]));
+  };
+  const frameChain = (index, frameId) => {
+    const chain = [];
+    try {
+      for (let entry = index.get(frameId); entry && chain.length < 20; entry = index.get(entry.parentFrameId)) {
+        if (!entry.documentId || entry.errorOccurred || entry.documentLifecycle !== 'active') return;
+        const { origin, href } = webUrl(entry.url);
+        chain.push({ frameId: entry.frameId, documentId: entry.documentId, origin, href });
+        if (entry.frameId === 0) {
+          if (entry.frameType === 'outermost_frame' && entry.documentId === documentId && origin === s.origin) return chain;
+          return;
+        }
+        if (entry.frameType !== 'sub_frame' || index.get(entry.parentFrameId)?.documentId !== entry.parentDocumentId) return;
+      }
+    } catch {}
+  };
+  const injectFrame = async (chain, operation, payload) => {
+    const [entry, ...ancestors] = chain;
+    if (!await hasHostAccess(chrome.permissions, webUrl(entry.href))) throw new Error('Frame host access is not granted');
+    let results;
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId: s.id, documentIds: [entry.documentId] }, world: 'ISOLATED', func: inspectionPage,
+        args: [entry.origin, s.overlayKey, operation, payload ?? null, ancestors.map(node => node.origin), entry.href],
+      });
+    } catch {
+      throw new Error('Chrome could not access the authorized frame document');
+    }
+    const [result] = results;
+    if (results.length !== 1 || result.documentId !== entry.documentId || result.frameId !== entry.frameId) {
+      throw new Error('Frame changed; run frames again');
+    }
+    return unwrap(result.result);
+  };
+  const verifyChain = async (chain, probes = new Map()) => {
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const { documentId: id } = chain[i];
+      if (!probes.has(id)) probes.set(id, injectFrame(chain.slice(i), 'scope'));
+      if (await probes.get(id) !== true) throw new Error('Frame ancestry could not be verified');
+    }
+  };
+  const assertChain = async (chain) => {
+    const current = frameChain(await frameIndex(), chain[0].frameId);
+    if (!current || JSON.stringify(current) !== JSON.stringify(chain)) throw new Error('Frame changed; run frames again');
+  };
   const ctx = {
     tabId: s?.id, origin: s?.origin, assertBridge, assertCurrent,
     browser: chrome, sessionState: connection.sessionState,
@@ -665,8 +717,25 @@ async function runAdapter(connection, verb, args) {
       if (integrationOperations.has(operation)) return inject(inPageIntegration, operation);
       throw new Error('Unsupported adapter operation');
     },
-    inspectionScope: async (frameId) => {
-      if (frameId !== 0) throw new Error('Subframe inspection is not enabled');
+    inspectionScope: async (frameId, expectedDocument) => {
+      if (frameId !== 0) {
+        const chain = frameChain(await frameIndex(), frameId);
+        if (!chain || chain[0].documentId !== expectedDocument) throw new Error('Frame is stale or unavailable; run frames again');
+        return { documentId: chain[0].documentId, assertCurrent: () => assertChain(chain),
+          run: async (operation, payload) => {
+            // CDP hit testing cannot pin synthetic dispatch to the verified ref and layout.
+            if (operation === 'click' && chain.some(node => node.origin !== s.origin)) {
+              throw new Error('Cross-origin frame clicks require safe ancestor hit testing, which Chrome cannot verify');
+            }
+            await verifyChain(chain);
+            await assertChain(chain);
+            const result = await injectFrame(chain, operation, payload);
+            await verifyChain(chain);
+            await assertChain(chain);
+            return result;
+          },
+        };
+      }
       await assertCurrent();
       return { documentId, assertCurrent,
         run: async (operation, value) => unwrap(await inject(inspectionPage, s.overlayKey, operation, value)),
@@ -693,6 +762,26 @@ async function runAdapter(connection, verb, args) {
       return !tab.pendingUrl && webUrl(tab.url).href === value;
     },
   };
+  if (verb === 'frames') {
+    if (args.length) throw new Error('Usage: frames');
+    const index = await frameIndex();
+    const probes = new Map();
+    const frames = [];
+    for (const frameId of index.keys()) {
+      if (frameId === 0) continue;
+      const chain = frameChain(index, frameId);
+      if (!chain) continue;
+      try {
+        await verifyChain(chain, probes);
+        frames.push(chain);
+      } catch {}
+    }
+    const current = await frameIndex();
+    return frames.flatMap(chain => {
+      const { frameId, documentId } = chain[0];
+      return JSON.stringify(frameChain(current, frameId)) === JSON.stringify(chain) ? [{ frameId, documentId }] : [];
+    });
+  }
   if (verb === 'title') {
     if (args.length) throw new Error('Invalid command arguments');
     return unwrap(await inject(inPage, s?.overlayKey, !s?.inManagedGroup, 'title'));
@@ -831,7 +920,7 @@ async function command(connection, args) {
   if (session && session.workspace !== workspace && (scoped || !browserWideCommands.has(verb))) {
     throw new Error('Select a tab for this VACU session with use TAB_ID');
   }
-  if (verb === 'title' || Object.hasOwn(adapterCommands, verb)) return runAdapter(connection, verb, args.slice(1));
+  if (verb === 'title' || verb === 'frames' || Object.hasOwn(adapterCommands, verb)) return runAdapter(connection, verb, args.slice(1));
   const s = session;
   if (!s) throw new Error('Select an allowed tab with vacu use TAB_ID');
   const { active: wasActive } = await checkedTab(s);

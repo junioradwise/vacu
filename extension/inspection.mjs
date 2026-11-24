@@ -188,7 +188,20 @@ async function screenshot(args, ctx) {
   return { format: 'jpeg', data: result.data };
 }
 
+async function clickFrame(args, ctx) {
+  const [frame, documentId, terms] = frameArg(args);
+  if (!frame || terms.length !== 1 || !refPattern.test(terms[0])) {
+    throw new Error('Usage: inspect-click --frame ID DOCUMENT_ID @iREF');
+  }
+  const scope = await scoped(ctx, frame, documentId);
+  await scope.assert();
+  const result = await scope.run('click', terms[0]);
+  await scope.assert();
+  return result;
+}
+
 export const commands = {
+  'inspect-click': clickFrame,
   'inspect-query': (args, ctx) => inspect(args, ctx, 'query'),
   'inspect-element': (args, ctx) => inspect(args, ctx, 'element'),
   'inspect-wait': wait,
@@ -197,7 +210,7 @@ export const commands = {
 };
 
 // Self-contained fixed function for chrome.scripting.executeScript, ISOLATED world only.
-export function inspectionPage(origin, key, operation, spec) {
+export function inspectionPage(origin, key, operation, spec, ancestors, href) {
   try {
     if (typeof key !== 'string' || !key || !/^https?:$/.test(location.protocol)
       || location.origin !== origin || globalThis.origin !== origin) {
@@ -268,6 +281,76 @@ export function inspectionPage(origin, key, operation, spec) {
       const { x, y, width, height } = el.getBoundingClientRect();
       return { tag: el.localName, role: role(el), name: name(el).slice(0, 150), text: text(el).slice(0, 500),
         visible: visible(el), enabled: enabled(el), rect: { x, y, width, height } };
+    }
+    if (ancestors) {
+      const actual = Array.from(location.ancestorOrigins ?? []);
+      if (location.href !== href || (window === window.top) !== (ancestors.length === 0)
+        || actual.length !== ancestors.length || actual.some((value, i) => value !== ancestors[i])) {
+        throw new Error('Frame origin or ancestry could not be verified');
+      }
+    }
+    const sameOriginChain = !ancestors || ancestors.every((value) => value === origin);
+    const owners = [];
+    if (sameOriginChain) {
+      for (let current = window; current !== window.top; current = current.parent) {
+        const frame = current.frameElement;
+        if (current.origin !== origin || current.parent.origin !== origin || frame?.localName !== 'iframe'
+          || frame.getRootNode() !== frame.ownerDocument || frame.hasAttribute('sandbox')
+          || frame.hasAttribute('srcdoc') || !visible(frame)) throw new Error('Frame is not an authorized visible iframe');
+        owners.push(frame);
+      }
+    }
+    if (operation === 'scope' && ancestors) return ok(true);
+    if (operation === 'click') {
+      if (!sameOriginChain) throw new Error('Cross-origin frames are inspection-only; ancestor hit testing is unavailable');
+      if (window === window.top) throw new Error('Frame required');
+      const el = resolveRef(spec);
+      if (!visible(el) || !enabled(el)) throw new Error('Frame control is hidden or disabled');
+      const rect = el.getBoundingClientRect();
+      const x = (Math.max(0, rect.left) + Math.min(innerWidth, rect.right)) / 2;
+      const y = (Math.max(0, rect.top) + Math.min(innerHeight, rect.bottom)) / 2;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !el.contains(hit) || !safe(hit) || !enabled(hit)) throw new Error('Frame control is covered or unavailable');
+      let px = x;
+      let py = y;
+      for (const frame of owners) {
+        const parent = frame.ownerDocument;
+        // shortcut: refuse transformed/zoomed owners until their coordinate mapping is supported.
+        for (let node = frame; node; node = node.parentElement) {
+          const style = parent.defaultView.getComputedStyle(node);
+          if (['transform', 'scale', 'rotate', 'translate', 'perspective', 'offsetPath'].some((prop) => style[prop] !== 'none')
+            || !['normal', '1'].includes(style.zoom)) throw new Error('Frame coordinate mapping is not supported');
+        }
+        const style = parent.defaultView.getComputedStyle(frame);
+        const box = frame.getBoundingClientRect();
+        px += box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+        py += box.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop);
+        if (!enabled(frame) || parent.elementFromPoint(px, py) !== frame) throw new Error('Frame control is covered or unavailable');
+      }
+      const labelControl = hit.closest('label')?.control;
+      // Native label activation can focus its associated control, even for synthetic clicks.
+      if (labelControl && (!labelControl.contains(hit) || !safe(labelControl) || !enabled(labelControl))) {
+        throw new Error('Unsupported label control');
+      }
+      const control = labelControl ?? hit.closest('button,input,textarea');
+      if (control?.form && ['image', 'submit', 'reset'].includes(control.type)) throw new Error('Frame form actions are not supported');
+      if (control?.matches('input,textarea') && /(?:^|\s)(?:username|current-password|new-password|one-time-code|webauthn|cc-[\w-]+)(?:\s|$)/i.test(control.autocomplete)) {
+        throw new Error('Credential or payment fields are not supported');
+      }
+      const anchor = hit.closest('a,area');
+      if (anchor && anchor.namespaceURI !== 'http://www.w3.org/1999/xhtml') {
+        throw new Error('Frame link destination is not supported');
+      }
+      if (anchor?.hasAttribute('href')) {
+        const target = anchor.getAttribute('target') || document.querySelector('base[target]')?.getAttribute('target') || '';
+        const url = new URL(anchor.getAttribute('href'), document.baseURI);
+        if (anchor.hasAttribute('download') || anchor.hasAttribute('ping') || !['', '_self'].includes(target.toLowerCase())
+          || !['http:', 'https:'].includes(url.protocol) || url.origin !== origin || url.username || url.password) {
+          throw new Error('Frame link destination is not supported');
+        }
+      }
+      hit.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, detail: 1 }));
+      return ok({ dispatched: true, trusted: false });
     }
     if (operation === 'condition') {
       const { event, spec: target } = spec;

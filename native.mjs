@@ -31,8 +31,10 @@ const server = createServer((client) => {
     if (!buffer.includes(10)) return;
     try {
       const args = JSON.parse(buffer.toString('utf8'));
-      if (!Array.isArray(args) || args.length < 1 || args.length > (args[0] === '--session' ? 8 : 6)
-        || !args.every((arg) => typeof arg === 'string')) throw new Error('Invalid command');
+      if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) throw new Error('Invalid command');
+      const index = args[0] === '--session' ? 2 : 0;
+      const framedWait = args[index] === 'inspect-wait' && args[index + 1] === '--frame';
+      if (args.length <= index || args.length > index + (framedWait ? 7 : 6)) throw new Error('Invalid command');
       id = randomUUID();
       pending.set(id, client);
       send({ id, args });

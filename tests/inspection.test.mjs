@@ -15,6 +15,8 @@ function context(overrides = {}) {
 
 function fixture(t) {
   const page = { location: new URL(origin), origin, scrollX: 7, scrollY: 11 };
+  page.window = {};
+  page.window.top = page.window;
   const rect = { x: 2, y: 3, width: 50, height: 10 };
   function element(localName, options = {}) {
     const el = {

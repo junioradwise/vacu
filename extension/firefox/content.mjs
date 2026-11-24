@@ -1,5 +1,5 @@
 // Packaged as a classic isolated content script, with the shared page functions inlined.
-export function install(interactionInPage, inspectionPage, scopedSnapshotInPage, waitTextInPage, getElementInPage) {
+export function install(interactionInPage, inspectionPage, scopedSnapshotInPage, waitTextInPage, getElementInPage, frameInspection, inspectFrame) {
   if (window !== window.top || globalThis.vacuFirefoxInstalled) return;
   globalThis.vacuFirefoxInstalled = true;
   let active;
@@ -18,10 +18,13 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
     closeActive?.();
     active = port;
     let state;
+    let frames;
+    const lifetime = new AbortController();
     const disconnect = closeActive = () => { clear(); port.disconnect(); };
     function clear() {
       if (active !== port) return;
       active = closeActive = undefined;
+      lifetime.abort();
       state?.host.remove();
       delete globalThis.piChrome;
       delete globalThis.vacuInspectionState;
@@ -57,6 +60,7 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
         host.attachShadow({ mode: 'closed' }).append(cursor);
         document.documentElement.append(host);
         state = globalThis.piChrome = { key, href, origin, host, cursor, title: () => document.title };
+        frames = frameInspection(origin, key, lifetime.signal, inspectFrame);
         return ok(true);
       }
       assertCurrent();
@@ -95,6 +99,8 @@ export function install(interactionInPage, inspectionPage, scopedSnapshotInPage,
         }
         case 'interaction': return interactionInPage(state.origin, state.key, ...args);
         case 'inspect': return inspectionPage(state.origin, state.key, ...args);
+        case 'frames': return ok(frames.frames());
+        case 'inspectFrame': return frames.run(...args);
         case 'waitCursor': {
           if (document.hidden) return ok(false);
           let raf;
